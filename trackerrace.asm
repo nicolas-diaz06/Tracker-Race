@@ -55,6 +55,11 @@ main:
     lw $s5, carSpeed
 
 loop:
+
+    jal updateScroll
+    # LIMPIAR PANTALLA PRIMERO
+    jal clearScreen
+    
     # Dibujar pista (fondo)
     jal drawTrack
    
@@ -238,75 +243,141 @@ fillLoop:
     bgtz $t2, fillLoop
     jr $ra
 
-drawTrack:
+clearScreen:
     addi $sp, $sp, -4
     sw $ra, 0($sp)
-   
-    # Dibujar sprite 64x64 en Y=0
-    li $a0, 0
-    li $a1, 0
-    jal drawPista64
-   
-    # Dibujar sprite 64x64 en Y=64
-    li $a0, 0
-    li $a1, 64
-    jal drawPista64
-   
+    
+    li $a0, 0x10008000
+    li $a1, 0x000000        # Negro
+    jal fillScreen
+    
     lw $ra, 0($sp)
     addi $sp, $sp, 4
     jr $ra
 
-# Dibuja sprite de pista 64x64
-# a0 = x, a1 = y
-drawPista64:
-    addi $sp, $sp, -20
+updateScroll:
+    lw $t0, scrollOffset
+    lw $t1, carSpeed
+    
+    # Scroll base (siempre se mueve)
+    addi $t0, $t0, 1
+    
+    # Agregar velocidad del auto
+    add $t0, $t0, $t1
+    
+    # Si llega a 64, volver a 0 (loop infinito)
+    li $t2, 64
+    blt $t0, $t2, saveScroll
+    sub $t0, $t0, $t2
+    
+saveScroll:
+    sw $t0, scrollOffset
+    jr $ra
+
+
+# REEMPLAZA COMPLETAMENTE drawTrack con esta versión:
+drawTrack:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    
+    lw $t9, scrollOffset    # Cargar offset actual
+    
+    # Sprite 1: Arriba (puede estar parcialmente fuera)
+    li $a0, 0               # X = 0
+    move $a1, $t9           # Y = offset
+    addi $a1, $a1, -64      # Restar 64 para que empiece arriba
+    jal drawPista64Simple
+    
+    # Sprite 2: Centro
+    li $a0, 0
+    move $a1, $t9           # Y = offset
+    jal drawPista64Simple
+    
+    # Sprite 3: Abajo
+    li $a0, 0
+    move $a1, $t9
+    addi $a1, $a1, 64       # Sumar 64 para que esté abajo
+    jal drawPista64Simple
+    
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr $ra
+
+
+# REEMPLAZA drawPista64 con esta versión SIMPLIFICADA:
+drawPista64Simple:
+    addi $sp, $sp, -24
     sw $ra, 0($sp)
     sw $s0, 4($sp)
     sw $s1, 8($sp)
     sw $s2, 12($sp)
     sw $s3, 16($sp)
+    sw $s4, 20($sp)
    
-    move $s0, $a0
-    move $s1, $a1
+    move $s0, $a0           # X inicial
+    move $s1, $a1           # Y inicial (puede ser negativo)
    
-    la $t0, pista64_data
-    li $t3, 0
+    la $s2, pista64_data    # Puntero a datos del sprite
+    li $s3, 0               # Contador de fila (0-63)
 
-loopPista64Y:
-    li $t4, 0
-loopPista64X:
-    lw $t5, 0($t0)
-    srl $t7, $t5, 24
-    beqz $t7, skipPista64Px
-    andi $t6, $t5, 0x00FFFFFF
-   
-    add $t8, $s1, $t3
-    li $t9, 64
-    mult $t8, $t9
-    mflo $t8
-    add $t8, $t8, $s0
-    add $t8, $t8, $t4
-    sll $t8, $t8, 2
-    li $t7, 0x10008000
-    add $t7, $t7, $t8
-    sw $t6, 0($t7)
+rowLoop:
+    # Calcular Y real en pantalla
+    add $s4, $s1, $s3       # Y_pantalla = Y_inicial + fila
+    
+    # ¿Está esta fila visible? (0 <= Y < 128)
+    bltz $s4, skipRow       # Si Y < 0, saltar
+    li $t0, 128
+    bge $s4, $t0, endSprite # Si Y >= 128, terminar
+    
+    # Esta fila SÍ es visible, dibujarla
+    li $s5, 0               # Contador de columna (0-63)
 
-skipPista64Px:
-    addi $t0, $t0, 4
-    addi $t4, $t4, 1
-    li $t7, 64
-    blt $t4, $t7, loopPista64X
-   
-    addi $t3, $t3, 1
-    li $t7, 64
-    blt $t3, $t7, loopPista64Y
-   
+colLoop:
+    # Leer pixel del sprite
+    lw $t0, 0($s2)          # RGBA
+    srl $t1, $t0, 24        # Alpha
+    beqz $t1, skipPixel     # Si alpha=0, skip
+    
+    # Calcular dirección en pantalla
+    andi $t0, $t0, 0x00FFFFFF   # RGB solo
+    li $t2, 0x10008000
+    move $t3, $s4           # Y
+    li $t4, 64
+    mult $t3, $t4
+    mflo $t3
+    add $t3, $t3, $s0       # + X inicial
+    add $t3, $t3, $s5       # + columna
+    sll $t3, $t3, 2
+    add $t2, $t2, $t3
+    
+    # Dibujar pixel
+    sw $t0, 0($t2)
+
+skipPixel:
+    addi $s2, $s2, 4        # Siguiente pixel en datos
+    addi $s5, $s5, 1        # Siguiente columna
+    li $t0, 64
+    blt $s5, $t0, colLoop   # Repetir 64 columnas
+    
+    j nextRow
+
+skipRow:
+    # Saltar 64 pixels en los datos (64*4 = 256 bytes)
+    addi $s2, $s2, 256
+
+nextRow:
+    addi $s3, $s3, 1        # Siguiente fila
+    li $t0, 64
+    blt $s3, $t0, rowLoop   # Repetir 64 filas
+
+endSprite:
     lw $ra, 0($sp)
     lw $s0, 4($sp)
     lw $s1, 8($sp)
     lw $s2, 12($sp)
     lw $s3, 16($sp)
-    addi $sp, $sp, 20
+    lw $s4, 20($sp)
+    addi $sp, $sp, 24
     jr $ra
    
 # Dibujar auto ROJO completo (basado en tu sprite)
@@ -603,6 +674,11 @@ gameOverMsg: .asciiz "\n=== GAME OVER ===\nScore: "
 newlineMsg: .asciiz "\n"
 hitMsg: .asciiz "HIT! Lives: "
 exitMsg: .asciiz "\nBye!\n"
+
+scrollOffset: .word 0
+
+lineOffset: .word 0      # Offset para el scroll de líneas
+lineSpeed: .word 1       # Velocidad de scroll
 # Sprite 32x32 del auto rojo
 animacion_choque_piedra_data:
     .word
