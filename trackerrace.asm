@@ -30,6 +30,7 @@
     colorWhite: .word 0xFFFFFF
    
     carX: .word 28        # X del auto (centrado)
+    carLane: .word 1      # 0=izq, 1=centro, 2=derecha
     carY: .word 50        # Y del auto
     carSpeed: .word 0     # Velocidad del auto (0-3)
    
@@ -44,36 +45,60 @@
     maxX: .word 56
     minY: .word 10
     maxY: .word 58
+    
+    lane0X: .word 13      # X del carril izquierdo (más a la izquierda)
+    lane1X: .word 32      # X del carril centro (centrado en pantalla)
+    lane2X: .word 51      # X del carril derecho (más a la derecha)
+    
+    obsLane0X: .word 9    # Obstáculo en carril izq (ajustado)
+    obsLane1X: .word 28   # Obstáculo en carril centro (sin cambios)
+    obsLane2X: .word 47   # Obstáculo en carril derecho (ajustado)
 
 .text
 main:
     li $s0, 0x10008000
-    lw $s1, carX
+    
+    # Inicializar carril en centro (carril 1)
+    li $t0, 1
+    sw $t0, carLane
+    
+    # Cargar posición correcta del carril centro
+    lw $s1, lane1X
+    sw $s1, carX          # Actualizar carX también
+    
     lw $s2, carY
     lw $s3, obsX
     lw $s4, obsY
     lw $s5, carSpeed
 
 loop:
-    # Dibujar pista (fondo)
+    # 1. Actualizar scroll
+    jal updateScroll
+    
+    # 2. Dibujar pista (borra fondo automáticamente)
     jal drawTrack
    
-    # Dibujar auto ROJO completo
+    # 3. Dibujar auto (con transparencia)
     move $a0, $s1
     move $a1, $s2
     jal drawCarSprite32
    
-    # Dibujar obstáculo
+    # 4. Dibujar obstáculo
     move $a0, $s3
     move $a1, $s4
     jal drawObstacle
    
-    # Mover obstáculo (más rápido)
-    addi $s4, $s4, 2      # Cae 2 pixels por frame (era 1)
+    # 5. Mover obstáculo
+    lw $t8, carSpeed
+    addi $t8, $t8, 2       # Base 2 + velocidad
+    add $s4, $s4, $t8
+    sw $s4, obsY           # ? AGREGAR ESTA LÍNEA (faltaba guardar!)
    
     # Reset obstáculo
-    blt $s4, 64, noReset
-    li $s4, -5
+    blt $s4, 128, noReset  # ? CAMBIAR: era 64, debe ser 128
+    li $s4, -8             # ? CAMBIAR: era -5, mejor -8
+    sw $s4, obsY           # ? AGREGAR: guardar después del reset
+    
     lw $t0, score
     addi $t0, $t0, 1
     sw $t0, score
@@ -88,16 +113,23 @@ loop:
     beq $t1, 1, setXLeft
     beq $t1, 2, setXRight
     li $s3, 50
+    sw $s3, obsX           # ? AGREGAR: guardar X
     j noReset
    
 setXFarLeft:
-    li $s3, 10
+    lw $s3, obsLane0X     # En lugar de lw $s3, lane0X
+    sw $s3, obsX
     j noReset
+    
 setXLeft:
-    li $s3, 22
+    lw $s3, obsLane1X     # En lugar de lw $s3, lane1X
+    sw $s3, obsX
     j noReset
+    
 setXRight:
-    li $s3, 38
+    lw $s3, obsLane2X     # En lugar de lw $s3, lane2X
+    sw $s3, obsX
+    j noReset
    
 noReset:
     # Check input
@@ -120,25 +152,62 @@ noReset:
     j noKey
    
 moveLeft:
-    lw $t2, minX
-    ble $s1, $t2, noKey
-    addi $s1, $s1, -2
-    sw $s1, carX
+    lw $t2, carLane
+    beqz $t2, noKey          # Ya está en carril 0
+    addi $t2, $t2, -1
+    sw $t2, carLane
+    
+    # Actualizar posición X según carril
+    beq $t2, 0, setLane0
+    beq $t2, 1, setLane1
+    j noKey
+
+setLane0:
+    lw $t3, lane0X
+    sw $t3, carX
+    move $s1, $t3
+    j noKey
+    
+setLane1:
+    lw $t3, lane1X
+    sw $t3, carX
+    move $s1, $t3
     j noKey
    
 moveRight:
-    lw $t2, maxX
-    bge $s1, $t2, noKey
-    addi $s1, $s1, 2
-    sw $s1, carX
+    lw $t2, carLane
+    li $t3, 2
+    bge $t2, $t3, noKey      # Ya está en carril 2
+    addi $t2, $t2, 1
+    sw $t2, carLane
+    
+    # Actualizar posición X según carril
+    beq $t2, 1, setLane1Right
+    beq $t2, 2, setLane2
+    j noKey
+
+setLane1Right:
+    lw $t3, lane1X
+    sw $t3, carX
+    move $s1, $t3
+    j noKey
+    
+setLane2:
+    lw $t3, lane2X
+    sw $t3, carX
+    move $s1, $t3
     j noKey
 
 moveUp:
-    # Acelerar - el auto "sube" en pantalla y obstáculos van más rápido
-    lw $t2, minY
-    ble $s2, $t2, checkSpeed
-    addi $s2, $s2, -1
-    sw $s2, carY
+    # Acelerar - solo aumenta velocidad, NO mueve el auto
+    lw $t2, carSpeed
+    li $t3, 3
+    bge $t2, $t3, noKey    # Ya está al máximo
+    addi $t2, $t2, 1
+    sw $t2, carSpeed
+    move $s5, $t2          # Actualizar $s5 también
+    j noKey
+
 checkSpeed:
     li $t3, 3
     bge $s5, $t3, noKey
@@ -147,11 +216,14 @@ checkSpeed:
     j noKey
 
 moveDown:
-    # Frenar - el auto "baja" y obstáculos van más lento
-    lw $t2, maxY
-    bge $s2, $t2, checkSlowDown
-    addi $s2, $s2, 1
-    sw $s2, carY
+    # Frenar - solo disminuye velocidad, NO mueve el auto
+    lw $t2, carSpeed
+    blez $t2, noKey        # Ya está en 0
+    addi $t2, $t2, -1
+    sw $t2, carSpeed
+    move $s5, $t2          # Actualizar $s5 también
+    j noKey
+    
 checkSlowDown:
     blez $s5, noKey
     addi $s5, $s5, -1
@@ -159,25 +231,52 @@ checkSlowDown:
     j noKey
 
 noKey:
-    # Check colisión
-    sub $t0, $s1, $s3
-    abs $t0, $t0
-   
-    li $t1, 8
-    bgt $t0, $t1, noCol
-   
-    sub $t0, $s2, $s4
-    abs $t0, $t0
-    li $t1, 10
-    bgt $t0, $t1, noCol
-   
+    # ==========================================
+    # DETECCIÓN DE COLISIÓN CORREGIDA
+    # ==========================================
+    # Auto: 32x32 píxeles, centrado en ($s1, $s2)
+    # Obstáculo: 8x8 píxeles, esquina superior izq en ($s3, $s4)
+    
+    # Verificar si el obstáculo está en rango Y visible
+    bltz $s4, noCol
+    li $t0, 128
+    bge $s4, $t0, noCol
+    
+    # Calcular bordes del auto (el sprite está centrado en $s1)
+    move $t0, $s1
+    addi $t0, $t0, -10        # Borde izquierdo (más tolerante)
+    move $t1, $s1
+    addi $t1, $t1, 10         # Borde derecho (más tolerante)
+    move $t2, $s2
+    addi $t2, $t2, 5          # Borde superior (más tolerante)
+    move $t3, $s2
+    addi $t3, $t3, 27         # Borde inferior (más tolerante)
+    
+    # Calcular bordes del obstáculo
+    move $t4, $s3             # Borde izquierdo
+    move $t5, $s3
+    addi $t5, $t5, 8          # Borde derecho
+    move $t6, $s4             # Borde superior
+    move $t7, $s4
+    addi $t7, $t7, 8          # Borde inferior
+    
+    # AABB Collision Detection
+    # NO hay colisión si:
+    bge $t0, $t5, noCol       # izq_auto >= der_obs
+    ble $t1, $t4, noCol       # der_auto <= izq_obs
+    bge $t2, $t7, noCol       # sup_auto >= inf_obs
+    ble $t3, $t6, noCol       # inf_auto <= sup_obs
+    
+    # Si llegamos aquí, HAY COLISIÓN
     j collision
 
 collision:
+    # Restar una vida
     lw $t0, lives
     addi $t0, $t0, -1
     sw $t0, lives
    
+    # Mostrar mensaje en consola
     li $v0, 4
     la $a0, hitMsg
     syscall
@@ -190,12 +289,46 @@ collision:
     la $a0, newlineMsg
     syscall
    
-    beq $t0, $zero, gameOver
+    # ¿Game Over?
+    beqz $t0, gameOver
    
-    li $s4, -5
+    # Si quedan vidas, resetear obstáculo lejos
+    li $s4, -20                    # Más lejos para dar tiempo
+    sw $s4, obsY
+    
+    # Cambiar carril del obstáculo
+    lw $t1, score
+    li $t2, 4
+    div $t1, $t2
+    mfhi $t1
+    
+    beq $t1, 0, collSetXFarLeft
+    beq $t1, 1, collSetXLeft
+    beq $t1, 2, collSetXRight
+    li $s3, 50
+    sw $s3, obsX
+    j noCol
+
+collSetXFarLeft:
+    lw $s3, obsLane0X     # Cambiar
+    sw $s3, obsX
+    j noCol
+    
+collSetXLeft:
+    lw $s3, obsLane1X     # Cambiar
+    sw $s3, obsX
+    j noCol
+    
+collSetXRight:
+    lw $s3, obsLane2X     # Cambiar
+    sw $s3, obsX
     j noCol
 
 gameOver:
+    # Limpiar pantalla final
+    jal clearScreen
+    
+    # Mostrar mensaje
     li $v0, 4
     la $a0, gameOverMsg
     syscall
@@ -207,13 +340,14 @@ gameOver:
     li $v0, 4
     la $a0, newlineMsg
     syscall
-
+    
+    # Salir
     li $v0, 10
     syscall
 
 noCol:
-    # Delay
-    li $t0, 50000
+    # Delay optimizado
+    li $t0, 8000           # Más corto = más frames = más suave
 delayLoop:
     addi $t0, $t0, -1
     bgtz $t0, delayLoop
@@ -238,75 +372,141 @@ fillLoop:
     bgtz $t2, fillLoop
     jr $ra
 
-drawTrack:
+clearScreen:
     addi $sp, $sp, -4
     sw $ra, 0($sp)
-   
-    # Dibujar sprite 64x64 en Y=0
-    li $a0, 0
-    li $a1, 0
-    jal drawPista64
-   
-    # Dibujar sprite 64x64 en Y=64
-    li $a0, 0
-    li $a1, 64
-    jal drawPista64
-   
+    
+    li $a0, 0x10008000
+    li $a1, 0x000000        # Negro
+    jal fillScreen
+    
     lw $ra, 0($sp)
     addi $sp, $sp, 4
     jr $ra
 
-# Dibuja sprite de pista 64x64
-# a0 = x, a1 = y
-drawPista64:
-    addi $sp, $sp, -20
+updateScroll:
+    lw $t0, scrollOffset
+    lw $t1, carSpeed
+    
+    # Scroll más suave
+    addi $t0, $t0, 1        # Era 2, ahora 1 (más suave)
+    
+    # Agregar velocidad del auto
+    add $t0, $t0, $t1
+    
+    # Loop cuando llega a 64
+    li $t2, 64
+loopCheck:
+    blt $t0, $t2, saveScroll
+    sub $t0, $t0, $t2
+    j loopCheck
+    
+saveScroll:
+    sw $t0, scrollOffset
+    jr $ra
+
+
+# REEMPLAZA COMPLETAMENTE drawTrack con esta versión:
+drawTrack:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    
+    lw $t9, scrollOffset    # Cargar offset actual
+    
+    # Sprite 1: Arriba (puede estar parcialmente fuera)
+    li $a0, 0               # X = 0
+    move $a1, $t9           # Y = offset
+    addi $a1, $a1, -64      # Restar 64 para que empiece arriba
+    jal drawPista64Simple
+    
+    # Sprite 2: Centro
+    li $a0, 0
+    move $a1, $t9           # Y = offset
+    jal drawPista64Simple
+    
+    # Sprite 3: Abajo
+    li $a0, 0
+    move $a1, $t9
+    addi $a1, $a1, 64       # Sumar 64 para que esté abajo
+    jal drawPista64Simple
+    
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr $ra
+
+
+drawPista64Simple:
+    addi $sp, $sp, -24
     sw $ra, 0($sp)
     sw $s0, 4($sp)
     sw $s1, 8($sp)
     sw $s2, 12($sp)
     sw $s3, 16($sp)
+    sw $s4, 20($sp)
    
-    move $s0, $a0
-    move $s1, $a1
+    move $s0, $a0           # X inicial
+    move $s1, $a1           # Y inicial
    
-    la $t0, pista64_data
-    li $t3, 0
+    la $s2, pista64_data
+    li $s3, 0               # fila
 
-loopPista64Y:
-    li $t4, 0
-loopPista64X:
-    lw $t5, 0($t0)
-    srl $t7, $t5, 24
-    beqz $t7, skipPista64Px
-    andi $t6, $t5, 0x00FFFFFF
-   
-    add $t8, $s1, $t3
-    li $t9, 64
-    mult $t8, $t9
-    mflo $t8
-    add $t8, $t8, $s0
-    add $t8, $t8, $t4
-    sll $t8, $t8, 2
-    li $t7, 0x10008000
-    add $t7, $t7, $t8
-    sw $t6, 0($t7)
+rowLoop:
+    add $s4, $s1, $s3       # Y_pantalla
+    
+    # Clipping vertical
+    bltz $s4, skipRow
+    li $t0, 128
+    bge $s4, $t0, endSprite
+    
+    li $s5, 0               # columna
 
-skipPista64Px:
-    addi $t0, $t0, 4
-    addi $t4, $t4, 1
-    li $t7, 64
-    blt $t4, $t7, loopPista64X
-   
-    addi $t3, $t3, 1
-    li $t7, 64
-    blt $t3, $t7, loopPista64Y
-   
+colLoop:
+    lw $t0, 0($s2)          # RGBA
+    srl $t1, $t0, 24        # Alpha
+    
+    # SI alpha = 0, dibujar NEGRO (esto borra el fondo)
+    beqz $t1, drawBlack
+    andi $t0, $t0, 0x00FFFFFF   # RGB
+    j drawIt
+    
+drawBlack:
+    li $t0, 0x000000        # Negro
+    
+drawIt:
+    # Calcular dirección
+    li $t2, 0x10008000
+    move $t3, $s4
+    li $t4, 64
+    mult $t3, $t4
+    mflo $t3
+    add $t3, $t3, $s0
+    add $t3, $t3, $s5
+    sll $t3, $t3, 2
+    add $t2, $t2, $t3
+    sw $t0, 0($t2)          # Dibujar siempre
+
+    addi $s2, $s2, 4
+    addi $s5, $s5, 1
+    li $t0, 64
+    blt $s5, $t0, colLoop
+    j nextRow
+
+skipRow:
+    addi $s2, $s2, 256      # Saltar fila
+
+nextRow:
+    addi $s3, $s3, 1
+    li $t0, 64
+    blt $s3, $t0, rowLoop
+
+endSprite:
     lw $ra, 0($sp)
     lw $s0, 4($sp)
     lw $s1, 8($sp)
     lw $s2, 12($sp)
     lw $s3, 16($sp)
-    addi $sp, $sp, 20
+    lw $s4, 20($sp)
+    addi $sp, $sp, 24
     jr $ra
    
 # Dibujar auto ROJO completo (basado en tu sprite)
@@ -532,63 +732,118 @@ setPixel:
 # a0 = x (posición X)
 # a1 = y (posición Y)
 drawCarSprite32:
-    la   $t0, animacion_choque_piedra_data  # dirección base del sprite
-    li   $t1, 32     # ancho
-    li   $t2, 32     # alto
-    li   $t3, 0      # fila = 0
+    addi $sp, $sp, -28
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)
+    sw $s1, 8($sp)
+    sw $s2, 12($sp)
+    sw $s3, 16($sp)
+    sw $s4, 20($sp)
+    sw $s5, 24($sp)
+    
+    move $s0, $a0        # X (centro del sprite)
+    move $s1, $a1        # Y (top del sprite)
+    
+    # Calcular X inicial (sprite centrado)
+    addi $s0, $s0, -16   # X inicial = X_centro - 16
+    
+    la $t0, animacion_choque_piedra_data
+    li $s3, 0            # fila
 
 loopY32:
-    li   $t4, 0      # columna = 0
+    li $s4, 0            # columna
 loopX32:
-    lw   $t5, 0($t0)         # color RGBA
-    srl $t7, $t5, 24          # extraer byte alpha
-    beqz $t7, skipPixel32     # si alpha=0, skip (transparente)
-    andi $t6, $t5, 0x00FFFFFF # sino, usar RGB
+    lw $t5, 0($t0)       # color RGBA
+    srl $t7, $t5, 24     # extraer alpha
+    beqz $t7, skipPixel32 # si alpha=0, skip
+    andi $t6, $t5, 0x00FFFFFF
    
-    # calcular dirección de píxel
-    li   $t7, 0x10008000
-    add  $t8, $a1, $t3
-    mul  $t8, $t8, 64         # ancho pantalla
-    add  $t8, $t8, $a0
-    add  $t8, $t8, $t4
-    sll  $t8, $t8, 2
-    add  $t7, $t7, $t8
-    sw   $t6, 0($t7)
+    # Calcular X del píxel
+    add $t8, $s0, $s4
+    
+    # CLIPPING HORIZONTAL - AGREGAR ESTO
+    bltz $t8, skipPixel32        # Si X < 0, skip
+    li $t9, 64
+    bge $t8, $t9, skipPixel32    # Si X >= 64, skip
+    
+    # Calcular Y del píxel
+    add $t9, $s1, $s3
+    
+    # CLIPPING VERTICAL
+    bltz $t9, skipPixel32        # Si Y < 0, skip
+    li $s2, 128
+    bge $t9, $s2, skipPixel32    # Si Y >= 128, skip
+    
+    # Calcular dirección de píxel
+    li $t7, 0x10008000
+    mul $s2, $t9, 64             # Y * ancho
+    add $s2, $s2, $t8            # + X
+    sll $s2, $s2, 2              # * 4 bytes
+    add $t7, $t7, $s2
+    sw $t6, 0($t7)
 
 skipPixel32:
     addi $t0, $t0, 4
-    addi $t4, $t4, 1
-    blt  $t4, 32, loopX32
+    addi $s4, $s4, 1
+    li $t9, 32
+    blt $s4, $t9, loopX32
 
-    addi $t3, $t3, 1
-    blt  $t3, 32, loopY32
+    addi $s3, $s3, 1
+    li $t9, 32
+    blt $s3, $t9, loopY32
 
+    lw $ra, 0($sp)
+    lw $s0, 4($sp)
+    lw $s1, 8($sp)
+    lw $s2, 12($sp)
+    lw $s3, 16($sp)
+    lw $s4, 20($sp)
+    lw $s5, 24($sp)
+    addi $sp, $sp, 28
     jr $ra
 
 drawObstacle:
     addi $sp, $sp, -8
     sw $ra, 0($sp)
-    sw $s6, 4($sp)      # Guardar $s6
+    sw $s6, 4($sp)
    
-    move $s6, $a0       # Guardar X original
-    move $s7, $a1       # Guardar Y original
+    move $s6, $a0       # X
+    move $s7, $a1       # Y
    
-    li $t5, 0           # Contador de filas (0 a 7)
+    li $t5, 0           # fila
     li $a2, 0xFFFF00    # Amarillo
    
 drawObsYLoop:
-    move $a0, $s6       # Restaurar X
-    move $a1, $s7       # Y base
-    add $a1, $a1, $t5   # Sumar fila actual
+    move $a0, $s6
+    move $a1, $s7
+    add $a1, $a1, $t5
+    
+    # Verificar que Y esté en pantalla
+    bltz $a1, skipObsRow
+    li $t9, 128
+    bge $a1, $t9, skipObsRow
    
-    li $t6, 0           # Contador de columnas (0 a 7)
+    li $t6, 0           # columna
 drawObsXLoop:
-    jal setPixel
-    addi $a0, $a0, 1    # Siguiente columna
+    # Calcular posición
+    li $t0, 0x10008000
+    move $t1, $a1       # Y
+    li $t2, 64
+    mult $t1, $t2
+    mflo $t1
+    add $t1, $t1, $a0   # + X
+    add $t1, $t1, $t6   # + columna
+    sll $t1, $t1, 2
+    add $t0, $t0, $t1
+    
+    # Dibujar píxel amarillo
+    sw $a2, 0($t0)
+    
     addi $t6, $t6, 1
     li $t7, 8
     blt $t6, $t7, drawObsXLoop
-   
+
+skipObsRow:
     addi $t5, $t5, 1
     li $t7, 8
     blt $t5, $t7, drawObsYLoop
@@ -598,11 +853,17 @@ drawObsXLoop:
     addi $sp, $sp, 8
     jr $ra
 
+
 .data
 gameOverMsg: .asciiz "\n=== GAME OVER ===\nScore: "
 newlineMsg: .asciiz "\n"
 hitMsg: .asciiz "HIT! Lives: "
 exitMsg: .asciiz "\nBye!\n"
+
+scrollOffset: .word 0
+
+lineOffset: .word 0      # Offset para el scroll de líneas
+lineSpeed: .word 1       # Velocidad de scroll
 # Sprite 32x32 del auto rojo
 animacion_choque_piedra_data:
     .word
